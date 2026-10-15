@@ -86,6 +86,37 @@ describe("cronSourceModule", () => {
     expect(emit).toHaveBeenCalledTimes(2);
   });
 
+  it("does not suppress a tick that fires a few milliseconds before a full cadence", async () => {
+    // Daily weekday schedule: the tightest gap is exactly 24h, and timer jitter can make
+    // the next tick measure as 86_399_999ms after the previous one.
+    fakeCronNextRuns = [
+      new Date("2026-03-25T07:30:00.000Z"),
+      new Date("2026-03-26T07:30:00.000Z"),
+      new Date("2026-03-27T07:30:00.000Z"),
+    ];
+    const emit = vi.fn();
+    const info = vi.fn();
+    const { cronSourceModule } = await loadCronSourceModule();
+    await cronSourceModule.start({
+      sourceId: "standup",
+      projectId: "api",
+      dataDir: "/tmp/spur-data",
+      config: { type: "cron", schedule: "30 7 * * 1-5", runOnStart: false },
+      emit,
+      signal: new AbortController().signal,
+      logger: { info },
+      resolveWebBaseUrl: () => Promise.resolve("http://127.0.0.1:5555"),
+    });
+
+    cronInstances[0]?.trigger();
+    expect(emit).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(24 * 60 * 60_000 - 1);
+    cronInstances[0]?.trigger();
+    expect(emit).toHaveBeenCalledTimes(2);
+    expect(info).not.toHaveBeenCalledWith(expect.stringContaining("cron tick suppressed"));
+  });
+
   it("rejects start when the schedule yields fewer than two runs", async () => {
     fakeCronNextRuns = [new Date("2026-03-25T10:00:00.000Z")];
     const { cronSourceModule } = await loadCronSourceModule();

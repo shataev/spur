@@ -3,6 +3,9 @@ import type { CronSourceConfig } from "../types.js";
 import type { SourceHandle, SourceModule, SourceStartDeps } from "./types.js";
 
 const CRON_GUARD_SAMPLE_RUNS = 64;
+// Timers can fire a few milliseconds early, so a tick exactly one cadence after the last one
+// may measure as slightly shorter. The guard only has to catch duplicates, not early ticks.
+const CRON_GUARD_JITTER_TOLERANCE_MS = 1_000;
 
 function deriveMinimumIntervalMs(cronJob: Cron, schedule: string): number {
   const runs = cronJob.nextRuns(CRON_GUARD_SAMPLE_RUNS);
@@ -37,11 +40,13 @@ async function startCronSource(deps: SourceStartDeps<CronSourceConfig>): Promise
     emitTick("schedule");
   });
   const minimumIntervalMs = deriveMinimumIntervalMs(cronJob, schedule);
+  const guardIntervalMs =
+    minimumIntervalMs - Math.min(CRON_GUARD_JITTER_TOLERANCE_MS, minimumIntervalMs / 2);
 
   const emitTick = (reason: "runOnStart" | "schedule"): void => {
     if (stopped || deps.signal.aborted) return;
     const now = Date.now();
-    if (lastTriggeredAt !== null && now - lastTriggeredAt < minimumIntervalMs) {
+    if (lastTriggeredAt !== null && now - lastTriggeredAt < guardIntervalMs) {
       deps.logger.info?.(
         `[source:${deps.projectId}/${deps.sourceId}] cron tick suppressed: reason=${reason}, schedule="${schedule}", minimumIntervalMs=${minimumIntervalMs}, elapsedMs=${now - lastTriggeredAt}`,
       );
